@@ -1,0 +1,16 @@
+requests
+rarfile
+psutil
+tqdm
+PyQt5
+playwright
+playwright_stealth
+beautifulsoup4
+undetected-chromedriver
+selenium
+beautifulsoup4
+lxml
+setuptools
+urllib3
+colorama
+pathlib

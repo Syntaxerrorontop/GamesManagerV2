@@ -19,9 +19,12 @@ echo Installing/updating pip...
 "%PYTHON_PATH%" -m pip install --upgrade pip
 
 echo Installing requirements...
-"%PYTHON_PATH%" -m pip install -r setuprequirements.txt
+"%PYTHON_PATH%" -m pip install -r requirements.txt
 
 echo Running setup.py...
+"%PYTHON_PATH%" setup.py
+
+echo Running autoupdater.py...
 "%PYTHON_PATH%" setup.py
 
 echo Done!

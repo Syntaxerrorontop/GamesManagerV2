@@ -32,17 +32,18 @@ if current_version != online_version:
             except Exception as e:
                 logging.error(f"Error removing {file}: {e}")
 
-    # PowerShell über Python ausführen
-    subprocess.run(["powershell", "-Command", ps_command], check=True)
-        
     name = hashlib.md5(repo_url.encode('utf-8')).hexdigest()
     clone_repo(name)
     
-    os.system(f'robocopy {os.path.join(os.getcwd(), name)} {os.getcwd()} /E /XF autoupdater.py setup.py setup.bat /R:0 /W:0')
+    os.system(f'robocopy {os.path.join(os.getcwd(), name)} {os.getcwd()} /E /XF autoupdater.py setup.py setup.bat .git /R:0 /W:0')
 
     py = sys.executable
     os.system(f'{py} -m pip install -r requirements.txt')
     
     ps_command = f'Remove-Item -Path "{os.path.join(os.getcwd(), name)}" -Recurse -Force'
 
+    subprocess.run(["powershell", "-Command", ps_command], check=True)
+    
+    ps_command = f'Remove-Item -Path "{os.path.join(os.getcwd(), ".git")}" -Recurse -Force'
+    
     subprocess.run(["powershell", "-Command", ps_command], check=True)

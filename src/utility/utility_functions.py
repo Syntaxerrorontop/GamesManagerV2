@@ -90,7 +90,7 @@ def _get_version_steamrip(url, scraper) -> str:
     if not url.startswith("https"):
         return ""
     response = scraper.get_html(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
+    soup = BeautifulSoup(response, 'html.parser')
 
     element = soup.select_one(selector=STEAMRIP_VERSION_SELECTOR)
     if element:

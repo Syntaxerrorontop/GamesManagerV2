@@ -14,3 +14,4 @@ setuptools
 urllib3
 colorama
 pathlib
+pywin32

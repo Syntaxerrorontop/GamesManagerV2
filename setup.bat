@@ -25,7 +25,7 @@ echo Running setup.py...
 "%PYTHON_PATH%" setup.py
 
 echo Running autoupdater.py...
-"%PYTHON_PATH%" setup.py
+"%PYTHON_PATH%" autoupdater.py
 
 echo Done!
 pause

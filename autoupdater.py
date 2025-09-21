@@ -21,13 +21,8 @@ online_version = requests.get("https://raw.githubusercontent.com/Syntaxerroronto
 
 if current_version != online_version:
     logging.info(f"Version Mutation Detected: {current_version} -> {online_version}")
-
-<<<<<<< HEAD
+    
     exceptions = "autoupdater.py","setup.py","setup.bat", "Games"
-=======
-    exceptions = "autoupdater.py","setup.py","setup.bat"
->>>>>>> 066cd7baa352e11cc4d2ae0aa7688a843b40a490
-
     # PowerShell-Befehl bauen
     ps_command = f'''
     $folder = "{os.getcwd()}";

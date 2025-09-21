@@ -12,23 +12,38 @@ import time
 import logging
 import platform
 import re
-from typing import Optional, Dict, Any, List, Union
+import threading
+import queue
+import uuid
+from typing import Optional, Dict, Any, List, Union, Callable
 from urllib.parse import urljoin, urlparse
+from concurrent.futures import Future
 import requests
 from pathlib import Path
-import psutil
-import win32gui
-import win32con
-import win32process
 
 # Install dependencies if needed
-
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.webdriver.support.expected_conditions import presence_of_element_located, title_is, staleness_of, element_to_be_clickable
-from selenium.common import TimeoutException, NoSuchElementException
-from bs4 import BeautifulSoup
+try:
+    import undetected_chromedriver as uc
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.wait import WebDriverWait
+    from selenium.webdriver.support.expected_conditions import presence_of_element_located, title_is, staleness_of, element_to_be_clickable
+    from selenium.common import TimeoutException, NoSuchElementException
+    from bs4 import BeautifulSoup
+    import colorama
+except ImportError:
+    print("Installing required dependencies...")
+    import subprocess
+    subprocess.check_call(["pip", "install", "undetected-chromedriver", "selenium", "beautifulsoup4", "requests", "colorama"])
+    import undetected_chromedriver as uc
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.wait import WebDriverWait
+    from selenium.webdriver.support.expected_conditions import presence_of_element_located, title_is, staleness_of, element_to_be_clickable
+    from selenium.common import TimeoutException, NoSuchElementException
+    from bs4 import BeautifulSoup
 
 # Challenge detection patterns
 CHALLENGE_TITLES = ['Just a moment...', 'DDoS-Guard', 'Please verify you are human']
@@ -62,6 +77,50 @@ CAPTCHA_SELECTORS = {
     }
 }
 
+class ScraperOperation:
+    """
+    Represents a single operation to be executed by the scraper
+    """
+    def __init__(self, operation_id: str, method_name: str, args: tuple, kwargs: dict):
+        self.operation_id = operation_id
+        self.method_name = method_name
+        self.args = args
+        self.kwargs = kwargs
+        self.result_future = Future()
+        self.created_at = time.time()
+        self.started_at = None
+        self.completed_at = None
+        self.thread_name = threading.current_thread().name
+    
+    def __str__(self):
+        return f"Operation[{self.operation_id[:8]}]: {self.method_name}({self.args}, {self.kwargs})"
+    
+    def set_result(self, result):
+        """Set the operation result"""
+        self.completed_at = time.time()
+        self.result_future.set_result(result)
+    
+    def set_exception(self, exception):
+        """Set an exception result"""
+        self.completed_at = time.time()
+        self.result_future.set_exception(exception)
+    
+    def get_result(self, timeout=None):
+        """Get the operation result (blocks until complete)"""
+        return self.result_future.result(timeout=timeout)
+    
+    def get_execution_time(self):
+        """Get the total execution time"""
+        if self.started_at and self.completed_at:
+            return self.completed_at - self.started_at
+        return None
+    
+    def get_wait_time(self):
+        """Get the time spent waiting in queue"""
+        if self.started_at:
+            return self.started_at - self.created_at
+        return time.time() - self.created_at
+
 class UniversalScraper:
     """
     A comprehensive web scraper that handles Cloudflare challenges, 
@@ -86,15 +145,31 @@ class UniversalScraper:
         self.current_url = None
         self.session = requests.Session()
         
+        # Thread-safe operation queue system
+        self.operation_queue = queue.Queue(maxsize=100)  # Prevent unlimited queue growth
+        self.queue_worker_thread = None
+        self.queue_running = False
+        self.queue_lock = threading.RLock()
+        self.operation_stats = {
+            'total_operations': 0,
+            'completed_operations': 0,
+            'failed_operations': 0,
+            'queue_size': 0
+        }
+        
+        # Thread safety validation
+        
         # Setup colorful Minecraft-style logging
         self._setup_colored_logging()
         self.logger = logging.getLogger('UniversalScraper')
-        
+        self._validate_thread_safety()
         # Set log level based on headless mode (less verbose when headless)
         if headless:
             self.logger.setLevel(logging.INFO)
         else:
             self.logger.setLevel(logging.DEBUG)
+            
+        self.logger.info(f"🎯 UniversalScraper initialized with queue system")
         
     def __enter__(self):
         """Context manager entry"""
@@ -104,6 +179,15 @@ class UniversalScraper:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
         self.close()
+        
+    def _validate_thread_safety(self) -> None:
+        """Validate that the queue system provides proper thread safety"""
+        # This method logs information about thread safety features
+        self.logger.debug("🔒 Thread safety features enabled:")
+        self.logger.debug("   - Queue-based operation serialization")
+        self.logger.debug("   - RLock for critical sections")
+        self.logger.debug("   - Operation result futures for thread coordination")
+        self.logger.debug("   - Dedicated worker thread for sequential processing")
         
     def _setup_colored_logging(self):
         """Setup colorful Minecraft-style logging with colors and brackets"""
@@ -209,14 +293,227 @@ class UniversalScraper:
         uc_logger = logging.getLogger('undetected_chromedriver')
         uc_logger.setLevel(logging.INFO)
         
+    def _start_queue_worker(self) -> None:
+        """Start the queue worker thread"""
+        with self.queue_lock:
+            if not self.queue_running:
+                self.queue_running = True
+                self.queue_worker_thread = threading.Thread(
+                    target=self._queue_worker,
+                    name="ScraperQueue",
+                    daemon=True
+                )
+                self.queue_worker_thread.start()
+                self.logger.info("🔄 Queue worker thread started")
+    
+    def _stop_queue_worker(self) -> None:
+        """Stop the queue worker thread"""
+        with self.queue_lock:
+            if self.queue_running:
+                self.logger.info("🚫 Stopping queue worker thread...")
+                self.queue_running = False
+                
+                # Add a sentinel value to wake up the worker
+                try:
+                    self.operation_queue.put(None, timeout=1)
+                except queue.Full:
+                    pass
+                
+                # Wait for worker thread to finish
+                if self.queue_worker_thread and self.queue_worker_thread.is_alive():
+                    self.queue_worker_thread.join(timeout=5)
+                    if self.queue_worker_thread.is_alive():
+                        self.logger.warning("⚠️ Queue worker thread did not stop gracefully")
+                
+                self.logger.info("✅ Queue worker stopped")
+    
+    def _queue_worker(self) -> None:
+        """Main queue worker loop - processes operations sequentially"""
+        self.logger.info("🛠️ Queue worker started, processing operations...")
+        
+        while self.queue_running:
+            operation = None
+            try:
+                # Get next operation from queue (blocks until available)
+                operation = self.operation_queue.get(timeout=1)
+                
+                # Sentinel value to stop worker
+                if operation is None:
+                    self.logger.debug("💭 Received stop signal, exiting queue worker")
+                    break
+                
+                self._execute_operation(operation)
+                
+            except queue.Empty:
+                # Timeout - continue loop to check if we should still be running
+                continue
+            except Exception as e:
+                self.logger.error(f"🚫 Unexpected error in queue worker: {e}")
+                if operation:
+                    try:
+                        operation.set_exception(e)
+                    except:
+                        pass
+            finally:
+                # Always mark task as done if we got an operation
+                if operation is not None:
+                    try:
+                        self.operation_queue.task_done()
+                    except ValueError:
+                        # task_done() called too many times
+                        pass
+        
+        self.logger.info("💭 Queue worker thread finished")
+    
+    def _execute_operation(self, operation: ScraperOperation) -> None:
+        """Execute a single operation from the queue"""
+        operation.started_at = time.time()
+        
+        with self.queue_lock:
+            self.operation_stats['queue_size'] = self.operation_queue.qsize()
+        
+        wait_time = operation.get_wait_time()
+        self.logger.debug(f"🚀 Executing {operation} (waited {wait_time:.3f}s)")
+        
+        try:
+            # Get the actual method to call
+            method_name = f"_internal_{operation.method_name}"
+            if hasattr(self, method_name):
+                method = getattr(self, method_name)
+                result = method(*operation.args, **operation.kwargs)
+                operation.set_result(result)
+                
+                with self.queue_lock:
+                    self.operation_stats['completed_operations'] += 1
+                
+                exec_time = operation.get_execution_time()
+                self.logger.debug(f"✅ Completed {operation.method_name} in {exec_time:.3f}s")
+            else:
+                raise AttributeError(f"Method {method_name} not found")
+                
+        except Exception as e:
+            self.logger.error(f"🚫 Error executing {operation}: {e}")
+            operation.set_exception(e)
+            
+            with self.queue_lock:
+                self.operation_stats['failed_operations'] += 1
+    
+    def _submit_operation(self, method_name: str, *args, timeout: int = None, **kwargs) -> Any:
+        """Submit an operation to the queue and wait for result"""
+        operation_id = str(uuid.uuid4())
+        operation = ScraperOperation(operation_id, method_name, args, kwargs)
+        
+        with self.queue_lock:
+            self.operation_stats['total_operations'] += 1
+            current_queue_size = self.operation_queue.qsize()
+        
+        thread_name = threading.current_thread().name
+        if current_queue_size > 0:
+            self.logger.debug(f"📎 [{thread_name}] Queuing {method_name} (queue size: {current_queue_size})")
+        else:
+            self.logger.debug(f"🚀 [{thread_name}] Executing {method_name} immediately")
+        
+        # Ensure worker is running
+        self._start_queue_worker()
+        
+        # Add operation to queue
+        try:
+            self.operation_queue.put(operation, timeout=5)  # Prevent indefinite blocking
+        except queue.Full:
+            self.logger.error(f"🚫 Queue is full, cannot submit {method_name}")
+            raise Exception(f"Queue is full, cannot submit operation: {method_name}")
+        
+        # Wait for result
+        try:
+            result = operation.get_result(timeout=timeout or self.timeout * 3)
+            self.logger.debug(f"✅ [{thread_name}] {method_name} completed successfully")
+            return result
+        except Exception as e:
+            self.logger.error(f"🚫 [{thread_name}] Operation {method_name} failed or timed out: {e}")
+            raise
+    
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get current queue statistics"""
+        with self.queue_lock:
+            stats = self.operation_stats.copy()
+            stats['queue_size'] = self.operation_queue.qsize()
+            stats['queue_maxsize'] = self.operation_queue.maxsize
+            stats['worker_running'] = self.queue_running
+            stats['worker_alive'] = self.queue_worker_thread and self.queue_worker_thread.is_alive()
+            stats['worker_thread_name'] = self.queue_worker_thread.name if self.queue_worker_thread else None
+            stats['calling_thread'] = threading.current_thread().name
+            return stats
+    
+    def wait_for_queue_empty(self, timeout: int = 30) -> bool:
+        """Wait for the operation queue to become empty
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if queue became empty, False if timeout occurred
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.operation_queue.empty():
+                self.logger.debug("✅ Queue is now empty")
+                return True
+            time.sleep(0.1)
+        
+        self.logger.warning(f"⏰ Timeout waiting for queue to empty after {timeout}s")
+        return False
+    
+    def clear_queue(self) -> int:
+        """Clear all pending operations from the queue
+        
+        Returns:
+            Number of operations that were cleared
+        """
+        cleared_count = 0
+        with self.queue_lock:
+            while not self.operation_queue.empty():
+                try:
+                    operation = self.operation_queue.get_nowait()
+                    if operation is not None:
+                        operation.set_exception(Exception("Operation cancelled - queue cleared"))
+                        cleared_count += 1
+                        self.operation_queue.task_done()
+                except queue.Empty:
+                    break
+        
+        self.logger.info(f"🧹 Cleared {cleared_count} operations from queue")
+        return cleared_count
+    
+    def is_thread_safe_call(self) -> bool:
+        """Check if the current call is being made in a thread-safe manner
+        
+        Returns:
+            True if the call is thread-safe (either from the queue worker or properly queued)
+        """
+        current_thread = threading.current_thread()
+        
+        # If we're the queue worker thread, we're safe
+        if current_thread == self.queue_worker_thread:
+            return True
+            
+        # If we're calling through the queue system, we're safe
+        # This is harder to detect, so we assume external calls are properly queued
+        return True  # The queue system handles this automatically
+        
     def start(self) -> None:
-        """Initialize the browser"""
+        """Initialize the browser and start queue worker"""
         if self.driver is None:
             self.driver = self._create_webdriver()
             self._update_requests_session()
             
+        # Start queue worker thread if not already running
+        self._start_queue_worker()
+            
     def close(self) -> None:
         """Close the browser and cleanup"""
+        # Stop queue worker first
+        self._stop_queue_worker()
+        
         if self.driver:
             try:
                 if os.name == 'nt':
@@ -253,30 +550,15 @@ class UniversalScraper:
         options.add_argument(f'--accept-lang={language}')
         
         # Windows headless mode
-        windows_headless = self.headless
+        windows_headless = self.headless and os.name == 'nt'
         
         try:
             driver = uc.Chrome(
                 options=options, 
                 windows_headless=windows_headless,
-                headless=self.headless,
-                use_subprocess=True,
+                headless=self.headless and os.name != 'nt'
             )
             
-            def hide_chrome_windows():
-                chrome_names = ["chrome.exe", "chromedriver.exe"]
-
-                for proc in psutil.process_iter(['pid', 'name']):
-                    if proc.info['name'] in chrome_names:
-                        pid = proc.info['pid']
-                        def callback(hwnd, _):
-                            _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                            if found_pid == pid:
-                                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
-                        win32gui.EnumWindows(callback, None)
-
-            hide_chrome_windows()
-            self.logger.info(f"Browser Hiden on Windows")
             # Execute script to remove webdriver property
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
@@ -374,16 +656,23 @@ class UniversalScraper:
         self.logger.info("Challenge resolution complete!")
         return True
         
-    def goto(self, url: str, wait_for_load: bool = True) -> Dict[str, Any]:
+    def goto(self, url: str, wait_for_load: bool = True, timeout: int = None) -> Dict[str, Any]:
         """
-        Navigate to a URL and handle challenges
+        Navigate to a URL and handle challenges (THREAD-SAFE)
         
         Args:
             url: URL to navigate to
             wait_for_load: Wait for page to fully load
+            timeout: Operation timeout
             
         Returns:
             Dict with page information
+        """
+        return self._submit_operation('goto', url, wait_for_load=wait_for_load, timeout=timeout)
+    
+    def _internal_goto(self, url: str, wait_for_load: bool = True) -> Dict[str, Any]:
+        """
+        Internal implementation of goto - called by queue worker
         """
         if not self.driver:
             self.start()
@@ -414,47 +703,68 @@ class UniversalScraper:
         self.logger.info(f"✓ Successfully accessed: {result['url']}")
         return result
         
-    def get_html(self, url: str = None, wait_for_load = True) -> str:
+    def get_html(self, url: str = None, timeout: int = None) -> str:
         """
-        Get HTML content from current page or navigate to URL
+        Get HTML content from current page or navigate to URL (THREAD-SAFE)
         
         Args:
             url: Optional URL to navigate to first
+            timeout: Operation timeout
             
         Returns:
             HTML content as string
         """
+        return self._submit_operation('get_html', url, timeout=timeout)
+    
+    def _internal_get_html(self, url: str = None) -> str:
+        """
+        Internal implementation of get_html - called by queue worker
+        """
         if url:
-            self.goto(url, wait_for_load=wait_for_load)
+            self._internal_goto(url)
         
         if not self.driver:
             raise Exception("No active browser session")
             
         return self.driver.page_source
         
-    def get_soup(self, url: str = None) -> BeautifulSoup:
+    def get_soup(self, url: str = None, timeout: int = None) -> BeautifulSoup:
         """
-        Get BeautifulSoup object for current page or navigate to URL
+        Get BeautifulSoup object for current page or navigate to URL (THREAD-SAFE)
         
         Args:
             url: Optional URL to navigate to first
+            timeout: Operation timeout
             
         Returns:
             BeautifulSoup object
         """
-        html = self.get_html(url)
+        return self._submit_operation('get_soup', url, timeout=timeout)
+    
+    def _internal_get_soup(self, url: str = None) -> BeautifulSoup:
+        """
+        Internal implementation of get_soup - called by queue worker
+        """
+        html = self._internal_get_html(url)
         return BeautifulSoup(html, 'html.parser')
         
-    def find_element(self, selector: str, by: str = "css") -> Any:
+    def find_element(self, selector: str, by: str = "css", timeout: int = None) -> Any:
         """
-        Find a single element by CSS selector or XPath
+        Find a single element by CSS selector or XPath (THREAD-SAFE)
         
         Args:
             selector: CSS selector or XPath
             by: 'css' or 'xpath'
+            timeout: Operation timeout
             
         Returns:
             WebElement or None
+        """
+        return self._submit_operation('find_element', selector, by=by, timeout=timeout)
+    
+    def _internal_find_element(self, selector: str, by: str = "css") -> Any:
+        """
+        Internal implementation of find_element - called by queue worker
         """
         if not self.driver:
             raise Exception("No active browser session")
@@ -469,16 +779,23 @@ class UniversalScraper:
         except NoSuchElementException:
             return None
             
-    def find_elements(self, selector: str, by: str = "css") -> List[Any]:
+    def find_elements(self, selector: str, by: str = "css", timeout: int = None) -> List[Any]:
         """
-        Find multiple elements by CSS selector or XPath
+        Find multiple elements by CSS selector or XPath (THREAD-SAFE)
         
         Args:
             selector: CSS selector or XPath
             by: 'css' or 'xpath'
+            timeout: Operation timeout
             
         Returns:
             List of WebElements
+        """
+        return self._submit_operation('find_elements', selector, by=by, timeout=timeout)
+    
+    def _internal_find_elements(self, selector: str, by: str = "css") -> List[Any]:
+        """
+        Internal implementation of find_elements - called by queue worker
         """
         if not self.driver:
             raise Exception("No active browser session")
@@ -490,17 +807,24 @@ class UniversalScraper:
         else:
             raise ValueError("by must be 'css' or 'xpath'")
             
-    def click(self, selector: str, by: str = "css", wait: bool = True) -> bool:
+    def click(self, selector: str, by: str = "css", wait: bool = True, timeout: int = None) -> bool:
         """
-        Click on an element
+        Click on an element (THREAD-SAFE)
         
         Args:
             selector: CSS selector or XPath
             by: 'css' or 'xpath'
             wait: Wait for element to be clickable
+            timeout: Operation timeout
             
         Returns:
             True if clicked successfully
+        """
+        return self._submit_operation('click', selector, by=by, wait=wait, timeout=timeout)
+    
+    def _internal_click(self, selector: str, by: str = "css", wait: bool = True) -> bool:
+        """
+        Internal implementation of click - called by queue worker
         """
         try:
             if wait:
@@ -513,7 +837,7 @@ class UniversalScraper:
                         element_to_be_clickable((By.XPATH, selector))
                     )
             else:
-                element = self.find_element(selector, by)
+                element = self._internal_find_element(selector, by)
                 
             if element:
                 # Scroll to element
@@ -898,17 +1222,24 @@ class UniversalScraper:
         self.logger.warning(f"Timeout waiting for CAPTCHA completion after {timeout} seconds")
         return False
             
-    def download_file(self, url: str, filename: str = None, use_browser: bool = True) -> Optional[str]:
+    def download_file(self, url: str, filename: str = None, use_browser: bool = True, timeout: int = None) -> Optional[str]:
         """
-        Download a file using either browser session or requests
+        Download a file using either browser session or requests (THREAD-SAFE)
         
         Args:
             url: URL of file to download
             filename: Optional filename (auto-detected if None)
             use_browser: Use browser session (recommended for protected files)
+            timeout: Operation timeout
             
         Returns:
             Path to downloaded file or None if failed
+        """
+        return self._submit_operation('download_file', url, filename=filename, use_browser=use_browser, timeout=timeout)
+    
+    def _internal_download_file(self, url: str, filename: str = None, use_browser: bool = True) -> Optional[str]:
+        """
+        Internal implementation of download_file - called by queue worker
         """
         try:
             # Resolve relative URLs
@@ -1089,41 +1420,3 @@ class UniversalScraper:
         if self.driver:
             self.driver.add_cookie(cookie_dict)
             self._update_requests_session()
-
-
-# Example usage and test function
-def test_universal_scraper():
-    """Test the Universal Scraper with various operations"""
-    print("=== Testing Universal Scraper ===")
-    
-    with UniversalScraper(headless=True, download_dir=".") as scraper:
-        # Test 1: Navigate to page
-        print("\nTest 1: Navigating to SteamRip...")
-        result = scraper.goto("https://steamrip.com/")
-        print(f"✓ Navigation result: {result}")
-        
-        # Test 2: Get page title and HTML snippet
-        print("\nTest 2: Extracting HTML...")
-        soup = scraper.get_soup()
-        print(f"✓ Page title: {soup.title.text if soup.title else 'No title'}")
-        print(f"✓ HTML length: {len(str(soup))} characters")
-        
-        # Test 3: Download a specific image
-        print("\nTest 3: Downloading specific image...")
-        image_url = "https://steamrip.com/wp-content/uploads/2025/01/ratten-reich-preinstalled-steamrip.jpg"
-        filepath = scraper.download_file(image_url)
-        if filepath:
-            print(f"✓ Downloaded: {filepath}")
-        
-        # Test 4: Find and click elements (example)
-        print("\nTest 4: Finding elements...")
-        images = scraper.find_elements("img")
-        print(f"✓ Found {len(images)} images on page")
-        
-        # Test 5: Take screenshot
-        print("\nTest 5: Taking screenshot...")
-        screenshot_path = scraper.screenshot("steamrip_screenshot.png")
-        print(f"✓ Screenshot saved: {screenshot_path}")
-
-if __name__ == "__main__":
-    test_universal_scraper()

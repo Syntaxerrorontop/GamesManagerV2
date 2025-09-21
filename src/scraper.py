@@ -414,7 +414,7 @@ class UniversalScraper:
         self.logger.info(f"✓ Successfully accessed: {result['url']}")
         return result
         
-    def get_html(self, url: str = None) -> str:
+    def get_html(self, url: str = None, wait_for_load = True) -> str:
         """
         Get HTML content from current page or navigate to URL
         
@@ -425,7 +425,7 @@ class UniversalScraper:
             HTML content as string
         """
         if url:
-            self.goto(url)
+            self.goto(url, wait_for_load=wait_for_load)
         
         if not self.driver:
             raise Exception("No active browser session")

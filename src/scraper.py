@@ -15,11 +15,57 @@ import re
 import threading
 import queue
 import uuid
+import signal
+import atexit
 from typing import Optional, Dict, Any, List, Union, Callable
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import Future
 import requests
 from pathlib import Path
+
+# Windows API for hiding windows
+if platform.system() == 'Windows':
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+# Global registry to track active Chrome processes for cleanup
+_active_chrome_processes = set()
+_cleanup_lock = threading.Lock()
+
+def _emergency_cleanup():
+    """Emergency cleanup function called on program exit"""
+    with _cleanup_lock:
+        if _active_chrome_processes:
+            print("\n🚨 Emergency cleanup: Terminating Chrome processes...")
+            for pid in list(_active_chrome_processes):
+                try:
+                    process = psutil.Process(pid)
+                    if process.is_running():
+                        # Kill Chrome process tree
+                        children = process.children(recursive=True)
+                        for child in children:
+                            try:
+                                child.terminate()
+                            except psutil.NoSuchProcess:
+                                pass
+                        
+                        process.terminate()
+                        # Wait a bit, then force kill if still alive
+                        try:
+                            process.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            process.kill()
+                        
+                        print(f"✅ Terminated Chrome process {pid}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                    pass
+            _active_chrome_processes.clear()
+            print("🧹 Emergency cleanup completed")
+
+# Register emergency cleanup
+atexit.register(_emergency_cleanup)
 
 # Install dependencies if needed
 try:
@@ -32,10 +78,11 @@ try:
     from selenium.common import TimeoutException, NoSuchElementException
     from bs4 import BeautifulSoup
     import colorama
+    import psutil
 except ImportError:
     print("Installing required dependencies...")
     import subprocess
-    subprocess.check_call(["pip", "install", "undetected-chromedriver", "selenium", "beautifulsoup4", "requests", "colorama"])
+    subprocess.check_call(["pip", "install", "undetected-chromedriver", "selenium", "beautifulsoup4", "requests", "colorama", "psutil"])
     import undetected_chromedriver as uc
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
@@ -44,6 +91,7 @@ except ImportError:
     from selenium.webdriver.support.expected_conditions import presence_of_element_located, title_is, staleness_of, element_to_be_clickable
     from selenium.common import TimeoutException, NoSuchElementException
     from bs4 import BeautifulSoup
+    import psutil
 
 # Challenge detection patterns
 CHALLENGE_TITLES = ['Just a moment...', 'DDoS-Guard', 'Please verify you are human']
@@ -127,23 +175,40 @@ class UniversalScraper:
     HTML extraction, clicking, and asset downloading.
     """
     
-    def __init__(self, headless: bool = True, timeout: int = 30, download_dir: str = "."):
+    def __init__(self, headless: bool = True, timeout: int = 30, download_dir: str = ".", hide_window: bool = True):
         """
         Initialize the Universal Scraper
         
         Args:
-            headless: Run browser in headless mode
+            headless: Run browser in headless mode (deprecated - use hide_window instead)
             timeout: Default timeout for operations
             download_dir: Directory to save downloaded files
+            hide_window: Hide browser window using psutil (recommended over headless)
         """
         self.driver = None
         self.headless = headless
+        self.hide_window = hide_window
         self.timeout = timeout
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(exist_ok=True)
         self.user_agent = None
         self.current_url = None
         self.session = requests.Session()
+        self.chrome_process = None  # Store Chrome process for window hiding
+        self.chrome_pids = set()  # Track Chrome process IDs for cleanup
+        
+        # Setup colorful Minecraft-style logging first
+        self._setup_colored_logging()
+        self.logger = logging.getLogger('UniversalScraper')
+        
+        # Set log level based on headless mode (less verbose when headless)
+        if headless:
+            self.logger.setLevel(logging.INFO)
+        else:
+            self.logger.setLevel(logging.DEBUG)
+            
+        # Register signal handlers for graceful shutdown
+        self._setup_signal_handlers()
         
         # Thread-safe operation queue system
         self.operation_queue = queue.Queue(maxsize=100)  # Prevent unlimited queue growth
@@ -158,18 +223,203 @@ class UniversalScraper:
         }
         
         # Thread safety validation
-        
-        # Setup colorful Minecraft-style logging
-        self._setup_colored_logging()
-        self.logger = logging.getLogger('UniversalScraper')
         self._validate_thread_safety()
-        # Set log level based on headless mode (less verbose when headless)
-        if headless:
-            self.logger.setLevel(logging.INFO)
-        else:
-            self.logger.setLevel(logging.DEBUG)
-            
+        
         self.logger.info(f"🎯 UniversalScraper initialized with queue system")
+        
+        # Log window hiding setting
+        if self.hide_window and platform.system() == 'Windows':
+            self.logger.info("🔍 Window hiding enabled - Chrome will be invisible")
+        elif self.headless:
+            self.logger.info("🔍 Headless mode enabled")
+        
+    def _hide_chrome_windows(self) -> None:
+        """Hide all Chrome windows using Windows API (Windows only)"""
+        if platform.system() != 'Windows':
+            self.logger.warning("⚠️ Window hiding only supported on Windows")
+            return
+            
+        try:
+            # Find Chrome windows and hide them
+            windows = []  # Move outside callback
+            
+            def enum_windows_callback(hwnd, lparam):
+                if user32.IsWindowVisible(hwnd):
+                    try:
+                        # Get process ID for this window
+                        process_id = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+                        
+                        # Get process name
+                        try:
+                            process = psutil.Process(process_id.value)
+                            process_name = process.name().lower()
+                            
+                            # Only hide windows from actual chrome.exe processes
+                            if process_name == 'chrome.exe':
+                                # Get window title for logging
+                                length = user32.GetWindowTextLengthW(hwnd)
+                                title = "Untitled"
+                                if length > 0:
+                                    title_buffer = ctypes.create_unicode_buffer(length + 1)
+                                    user32.GetWindowTextW(hwnd, title_buffer, length + 1)
+                                    title = title_buffer.value
+                                
+                                self.logger.debug(f"🔍 Hiding Chrome window: {title} (PID: {process_id.value})")
+                                user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+                                windows.append(hwnd)
+                                
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            # Process might have died or we don't have access
+                            pass
+                            
+                    except Exception:
+                        # Skip this window if we can't get process info
+                        pass
+                        
+                return True
+            
+            # Enumerate all windows
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
+            
+            if windows:
+                self.logger.info(f"✅ Hidden {len(windows)} Chrome windows")
+            else:
+                self.logger.debug("🔍 No Chrome windows found to hide")
+                
+        except Exception as e:
+            self.logger.error(f"🚫 Error hiding Chrome windows: {e}")
+    
+    def _find_chrome_process(self) -> Optional[psutil.Process]:
+        """Find the Chrome process associated with our webdriver"""
+        try:
+            if not self.driver:
+                return None
+                
+            # Get the Chrome process ID from the service
+            if hasattr(self.driver, 'service') and hasattr(self.driver.service, 'process'):
+                service_process = self.driver.service.process
+                if service_process:
+                    # Look for Chrome processes that are children or related
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        try:
+                            if ('chrome' in proc.info['name'].lower() and 
+                                proc.info['cmdline'] and 
+                                any('--test-type' in arg or '--disable-extensions' in arg 
+                                    for arg in proc.info['cmdline'])):
+                                return proc
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+            
+        except Exception as e:
+            self.logger.debug(f"Could not find Chrome process: {e}")
+        
+        return None
+    
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown"""
+        def signal_handler(signum, frame):
+            self.logger.info(f"🚨 Received signal {signum}, cleaning up...")
+            self.close()
+            exit(0)
+        
+        # Register handlers for common termination signals
+        if platform.system() != 'Windows':
+            signal.signal(signal.SIGTERM, signal_handler)
+            signal.signal(signal.SIGINT, signal_handler)
+        else:
+            # Windows doesn't support SIGTERM, use SIGINT (Ctrl+C)
+            signal.signal(signal.SIGINT, signal_handler)
+    
+    def _register_chrome_process(self, process: psutil.Process) -> None:
+        """Register a Chrome process for cleanup tracking"""
+        if process and process.is_running():
+            with _cleanup_lock:
+                self.chrome_pids.add(process.pid)
+                _active_chrome_processes.add(process.pid)
+                self.logger.debug(f"📝 Registered Chrome process {process.pid} for cleanup")
+    
+    def _unregister_chrome_process(self, pid: int) -> None:
+        """Unregister a Chrome process from cleanup tracking"""
+        with _cleanup_lock:
+            self.chrome_pids.discard(pid)
+            _active_chrome_processes.discard(pid)
+            self.logger.debug(f"📝 Unregistered Chrome process {pid} from cleanup")
+    
+    def _kill_chrome_processes(self) -> None:
+        """Forcefully kill all tracked Chrome processes"""
+        killed_count = 0
+        with _cleanup_lock:
+            for pid in list(self.chrome_pids):
+                try:
+                    process = psutil.Process(pid)
+                    if process.is_running():
+                        self.logger.info(f"🔫 Terminating Chrome process {pid}...")
+                        
+                        # Kill all children first
+                        try:
+                            children = process.children(recursive=True)
+                            for child in children:
+                                try:
+                                    child.terminate()
+                                    child.wait(timeout=1)
+                                except (psutil.TimeoutExpired, psutil.NoSuchProcess):
+                                    try:
+                                        child.kill()
+                                    except psutil.NoSuchProcess:
+                                        pass
+                        except psutil.NoSuchProcess:
+                            pass
+                        
+                        # Now kill the main process
+                        try:
+                            process.terminate()
+                            process.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            self.logger.warning(f"⚠️ Force killing Chrome process {pid}")
+                            process.kill()
+                            process.wait(timeout=1)
+                        
+                        killed_count += 1
+                        self._unregister_chrome_process(pid)
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                    self._unregister_chrome_process(pid)
+        
+        if killed_count > 0:
+            self.logger.info(f"✅ Successfully terminated {killed_count} Chrome processes")
+    
+    def _register_webdriver_chrome_processes(self) -> None:
+        """Register Chrome processes spawned by webdriver for cleanup"""
+        try:
+            # Get the webdriver service process first
+            service_pid = None
+            if (hasattr(self.driver, 'service') and 
+                hasattr(self.driver.service, 'process') and 
+                self.driver.service.process):
+                service_pid = self.driver.service.process.pid
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'ppid']):
+                try:
+                    # Only register Chrome processes that are related to our webdriver
+                    if ('chrome' in proc.info['name'].lower() and 
+                        proc.info['cmdline']):
+                        
+                        # Check if this Chrome process has webdriver-specific arguments
+                        webdriver_args = ['--test-type', '--disable-extensions', '--disable-background-timer-throttling']
+                        is_webdriver_chrome = any(arg in proc.info['cmdline'] for arg in webdriver_args)
+                        
+                        # Or if it's a child of our service process
+                        is_child_of_service = service_pid and proc.info['ppid'] == service_pid
+                        
+                        if (is_webdriver_chrome or is_child_of_service) and proc.pid not in self.chrome_pids:
+                            self._register_chrome_process(proc)
+                            
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            self.logger.debug(f"Error registering webdriver Chrome processes: {e}")
         
     def __enter__(self):
         """Context manager entry"""
@@ -511,18 +761,29 @@ class UniversalScraper:
             
     def close(self) -> None:
         """Close the browser and cleanup"""
+        self.logger.info("💯 Starting cleanup process...")
+        
         # Stop queue worker first
         self._stop_queue_worker()
         
         if self.driver:
             try:
+                # Try graceful shutdown first
+                self.logger.debug("🔄 Attempting graceful driver shutdown...")
                 if os.name == 'nt':
                     self.driver.close()
                 self.driver.quit()
+                self.logger.debug("✅ Driver shutdown completed")
             except Exception as e:
-                self.logger.warning(f"Error closing driver: {e}")
+                self.logger.warning(f"⚠️ Error during graceful driver shutdown: {e}")
             finally:
                 self.driver = None
+                
+        # Force kill any remaining Chrome processes
+        self.logger.debug("🔫 Force killing any remaining Chrome processes...")
+        self._kill_chrome_processes()
+        
+        self.logger.info("🧹 Cleanup completed successfully")
                 
     def _create_webdriver(self) -> uc.Chrome:
         """Create undetected Chrome webdriver with optimal settings"""
@@ -549,14 +810,15 @@ class UniversalScraper:
         language = os.environ.get('LANG', 'en-US')
         options.add_argument(f'--accept-lang={language}')
         
-        # Windows headless mode
-        windows_headless = self.headless and os.name == 'nt'
+        # Use headless only if hide_window is False
+        use_headless = self.headless and not self.hide_window
+        windows_headless = use_headless and os.name == 'nt'
         
         try:
             driver = uc.Chrome(
                 options=options, 
                 windows_headless=windows_headless,
-                headless=self.headless and os.name != 'nt'
+                headless=use_headless and os.name != 'nt'
             )
             
             # Execute script to remove webdriver property
@@ -565,6 +827,23 @@ class UniversalScraper:
             # Get user agent
             self.user_agent = driver.execute_script("return navigator.userAgent")
             self.logger.info(f"Browser User-Agent: {self.user_agent}")
+            
+            # Hide Chrome windows if requested and not in headless mode
+            if self.hide_window and not use_headless and platform.system() == 'Windows':
+                # Give Chrome time to fully load
+                time.sleep(2)
+                self._hide_chrome_windows()
+                
+                # Schedule periodic window hiding (some windows might appear later)
+                threading.Timer(5.0, self._hide_chrome_windows).start()
+            
+            # Always register Chrome processes for cleanup (regardless of window hiding)
+            self.chrome_process = self._find_chrome_process()
+            if self.chrome_process:
+                self._register_chrome_process(self.chrome_process)
+            
+            # Register only webdriver-related Chrome processes
+            self._register_webdriver_chrome_processes()
             
             return driver
             

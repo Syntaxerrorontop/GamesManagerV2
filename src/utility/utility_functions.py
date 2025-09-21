@@ -104,7 +104,7 @@ def _get_version_steamrip(url, scraper) -> str:
             return f"ERROR 2 PLEASE REPORT THIS TO THE AUTHOR {url}"
     else:
         logging.error(f"Element not found: {STEAMRIP_VERSION_SELECTOR}")
-        return "ERROR PLEASE REPORT THIS TO THE AUTHOR"
+        return f"ERROR PLEASE REPORT THIS TO THE AUTHOR {url}"
 
 def _game_naming(folder):
         logging.debug("Searching for every Executable file...")

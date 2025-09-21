@@ -104,7 +104,19 @@ def _get_version_steamrip(url, scraper) -> str:
             return f"ERROR 2 PLEASE REPORT THIS TO THE AUTHOR {url}"
     else:
         logging.error(f"Element not found: {STEAMRIP_VERSION_SELECTOR}")
-        return f"ERROR PLEASE REPORT THIS TO THE AUTHOR {url}"
+        logging.warning("Using fallback method to get version...")
+        element = soup.select_one(selector=".plus > ul:nth-child(1) > li:nth-child(6)")
+        if element:
+            try:
+                version = element.text.strip().replace("Version: ", "")
+                logging.debug(version)
+                logging.debug(f"Request Successful: {url} Version: {version}")
+                return version
+            except Exception as e:
+                logging.error(e)
+                return f"ERROR 3 PLEASE REPORT THIS TO THE AUTHOR {url}"
+        else:
+            return f"ERROR PLEASE REPORT THIS TO THE AUTHOR {url}"
 
 def _game_naming(folder):
         logging.debug("Searching for every Executable file...")

@@ -101,7 +101,7 @@ def _get_version_steamrip(url, scraper) -> str:
             return version
         except Exception as e:
             logging.error(e)
-            return "ERROR 2 PLEASE REPORT THIS TO THE AUTHOR"
+            return f"ERROR 2 PLEASE REPORT THIS TO THE AUTHOR {url}"
     else:
         logging.error(f"Element not found: {STEAMRIP_VERSION_SELECTOR}")
         return "ERROR PLEASE REPORT THIS TO THE AUTHOR"

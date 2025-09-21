@@ -23,14 +23,14 @@ if current_version != online_version:
     logging.info(f"Version Missmatch Detected: {current_version} -> {online_version}")
     
     exceptions = "autoupdater.py","setup.py","setup.bat", "Games"
-    # PowerShell-Befehl bauen
-    ps_command = f'''
-    $folder = "{os.getcwd()}";
-    $exceptions = @({",".join(f'"{e}"' for e in exceptions)});
-    Get-ChildItem -Path $folder -File -Recurse | Where-Object {{
-        $exceptions -notcontains $_.Name
-    }} | Remove-Item -Force
-    '''
+    for file in os.listdir(os.getcwd()):
+        if file not in exceptions:
+            try:
+                ps_command = f'Remove-Item -Path "{os.path.join(os.getcwd(), file)}" -Recurse -Force'
+
+                subprocess.run(["powershell", "-Command", ps_command], check=True)
+            except Exception as e:
+                logging.error(f"Error removing {file}: {e}")
 
     # PowerShell über Python ausführen
     subprocess.run(["powershell", "-Command", ps_command], check=True)

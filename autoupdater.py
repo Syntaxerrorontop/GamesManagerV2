@@ -20,7 +20,7 @@ except:
 online_version = requests.get("https://raw.githubusercontent.com/Syntaxerrorontop/GamesManagerV2/master/version.txt").text
 
 if current_version != online_version:
-    logging.info(f"Version Mutation Detected: {current_version} -> {online_version}")
+    logging.info(f"Version Missmatch Detected: {current_version} -> {online_version}")
     
     exceptions = "autoupdater.py","setup.py","setup.bat", "Games"
     # PowerShell-Befehl bauen

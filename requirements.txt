@@ -3,8 +3,6 @@ rarfile
 psutil
 tqdm
 PyQt5
-playwright
-playwright_stealth
 beautifulsoup4
 undetected-chromedriver
 selenium

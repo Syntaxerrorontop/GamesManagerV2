@@ -5,21 +5,29 @@ import shutil
 import subprocess
 import ctypes
 import sys
+import traceback
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QMessageBox
 from PyQt5.QtGui import QFontDatabase, QFont
 
-from src.utility.utility_functions import load_json, save_json#, powershell, process_running, kill_process
+from src.utility.utility_functions import load_json, save_json
 from src.utility.utility_vars import CONFIG_FOLDER, ASSET_FOLDER, CACHE_FOLDER
 from src.utility.utility_classes import File
-from src import Libary, Searcher, DownloadManager
+from src import Libary, Searcher, DownloadManager, Settings
 from src.scraper import UniversalScraper
+
+def log_uncaught_exceptions(ex_cls, ex, tb):
+    text = '{}: {}:\n'.format(ex_cls.__name__, ex)
+    text += ''.join(traceback.format_tb(tb))
+    logging.critical(text)
+    # MessageBox to notify user without crashing? User said "only prints a detailed crashlog".
+    # So we just log it.
+    
+sys.excepthook = log_uncaught_exceptions
 
 class TabWidget(QWidget):
     def __init__(self):
         super().__init__()
-        
-        logging.debug("Init TabWidget")
         
         self.scraper = UniversalScraper(download_dir=CACHE_FOLDER, headless=False)
         self.scraper.start()
@@ -43,12 +51,12 @@ class TabWidget(QWidget):
                 padding: 10px;
                 margin: 5px;
                 border-radius: 10px;
-                min-width: 287px;  /* Breite anpassen */
+                min-width: 287px;
                 max-width: 287px;
-                min-height: 40px;  /* Höhe anpassen */
+                min-height: 40px;
                 max-height: 40px;
                 font-size: 20px;
-                font-family: 'Montserrat', sans-serif; /* Custom Font */
+                font-family: 'Montserrat', sans-serif;
             }
             QTabBar::tab:selected {
                 background: #666;
@@ -58,7 +66,7 @@ class TabWidget(QWidget):
         self.library_tab = Libary.Libary(self)
         self.download_manager = DownloadManager.DownloadManager(self)
         self.search_tab = Searcher.GameListWidget(self)
-        self.settings_tab = QWidget()
+        self.settings_tab = Settings.Settings(self)
         self.scripts_tab = QWidget()
         self.feedback_tab = QWidget()
         
@@ -103,11 +111,10 @@ class Ui_MainWindow:
         font_id = QFontDatabase.addApplicationFont(os.path.join(ASSET_FOLDER,"Montserrat-Regular.ttf"))
         if font_id != -1:
             font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
-            self.mainwindow.setFont(QFont(font_family, 16))  # Set the default font
+            self.mainwindow.setFont(QFont(font_family, 16))
         
         self.mainwindow.setWindowTitle("lol")
         self.mainwindow.resize(1920, 1080)
-        #self.mainwindow.setFixedSize(1920, 1080)
 
         
         self.tab_widget = TabWidget()
@@ -197,11 +204,14 @@ def delete_unaccessary_folder():
     for folder in folders:
         if folder in os.listdir(os.getcwd()):
             if os.path.isdir(folder):
-                shutil.rmtree(folder)
-                logging.info(f"Deleted {folder}")
+                try:
+                    shutil.rmtree(folder)
+                    logging.info(f"Deleted {folder}")
+                except OSError as e:
+                    logging.error(f"Error deleting folder {folder}: {e}")
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO, format='[%(asctime)s][%(levelname)s] %(name)s/%(module)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     
     if not os.path.exists(os.path.join(CONFIG_FOLDER, ".check_folder")):
     
@@ -228,9 +238,17 @@ if __name__ == "__main__":
             )
 
         if response == 6:
-            subprocess.run(f'powershell -Command "Start-Process powershell -ArgumentList \\"Add-MpPreference -ExclusionPath \'{os.getcwd()}\'\\" -Verb RunAs"', shell=True, check=True)
-            programm_info["excluded"] = True
-            programm_info["allow_exclusion_request"] = False
+            try:
+                subprocess.run(f'powershell -Command "Start-Process powershell -ArgumentList \"Add-MpPreference -ExclusionPath \'{os.getcwd()}\'\" -Verb RunAs"', shell=True, check=True)
+                programm_info["excluded"] = True
+                programm_info["allow_exclusion_request"] = False
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Powershell command failed: {e}")
+                QMessageBox.warning(None, "Warning", "Failed to add exclusion to Windows Defender. Please add it manually.")
+            except FileNotFoundError:
+                logging.error("Powershell executable not found.")
+                QMessageBox.warning(None, "Warning", "Powershell not found. Cannot add exclusion to Windows Defender.")
+
         
         elif response == 7:
             pass

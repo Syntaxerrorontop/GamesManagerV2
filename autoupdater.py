@@ -47,5 +47,3 @@ if current_version != online_version:
     ps_command = f'Remove-Item -Path "{os.path.join(os.getcwd(), ".git")}" -Recurse -Force'
     
     subprocess.run(["powershell", "-Command", ps_command], check=True)
-    
-    os.system("playwright install")

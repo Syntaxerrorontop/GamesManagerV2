@@ -74,7 +74,7 @@ def cloud_flare_request(url_r):
         logging.error(f"Cloudflare request failed: {json_response}")
         return None
     best_cookies = {c['name']: c['value'] for c in json_response.get('solution').get('cookies') if c['name'] == 'cf_clearance'}
-    print(best_cookies)
+    logging.debug(f"Cloudflare cookies: {best_cookies}")
     return json_response.get('solution').get('response'), best_cookies
 
 def get_png(page_content) -> str:
@@ -100,11 +100,10 @@ def _get_version_steamrip(url, scraper) -> str:
             logging.debug(f"Request Successful: {url} Version: {version}")
             return version
         except Exception as e:
-            logging.error(e)
-            return f"ERROR 2 PLEASE REPORT THIS TO THE AUTHOR {url}"
+            logging.error(f"Error parsing version from element for {url}: {e}")
+            return f"Error: Failed to parse version for {url}. Details: {e}"
     else:
-        logging.error(f"Element not found: {STEAMRIP_VERSION_SELECTOR}")
-        logging.warning("Using fallback method to get version...")
+        logging.warning(f"Element with selector '{STEAMRIP_VERSION_SELECTOR}' not found for {url}. Using fallback method...")
         element = soup.select_one(selector=".plus > ul:nth-child(1) > li:nth-child(6)")
         if element:
             try:
@@ -113,57 +112,60 @@ def _get_version_steamrip(url, scraper) -> str:
                 logging.debug(f"Request Successful: {url} Version: {version}")
                 return version
             except Exception as e:
-                logging.error(e)
-                return f"ERROR 3 PLEASE REPORT THIS TO THE AUTHOR {url}"
+                logging.error(f"Error parsing version from fallback element for {url}: {e}")
+                return f"Error: Failed to parse version from fallback for {url}. Details: {e}"
         else:
-            return f"ERROR PLEASE REPORT THIS TO THE AUTHOR {url}"
-
+            logging.error(f"Neither primary nor fallback element found for version for {url}.")
+            return f"Error: Version element not found for {url}."
 def _game_naming(folder):
-        logging.debug("Searching for every Executable file...")
+        logging.debug(f"Attempting to determine main executable for folder: {folder}")
         exes = []
         full_path_game_execution = None
         
-        for name in os.listdir(os.path.join(os.path.join(os.getcwd(), "Games", folder))):
+        # First pass: look for a direct match in the root of the game folder
+        for name in os.listdir(os.path.join(os.getcwd(), "Games", folder)):
             if name.endswith(".exe"):
-                if not "unity" in name:
+                if "unity" not in name.lower(): # Exclude common engine executables if possible
                     full_path_game_execution = os.path.join("Games", folder, name)
-                    logging.debug(f"Main game file detected: {full_path_game_execution}")
+                    logging.debug(f"Main executable found in root of {folder}: {full_path_game_execution}")
                     return full_path_game_execution
         
-        if full_path_game_execution==None:
+        # Second pass: recursive search within the game folder
+        if full_path_game_execution is None:
+            logging.debug(f"No direct executable found in {folder} root. Performing recursive search...")
             for path, subdirs, files in os.walk(os.path.join(os.getcwd(), "Games", folder)):
-                if not full_path_game_execution == None:
-                    break
+                if full_path_game_execution is not None:
+                    break # Stop if already found in a deeper subdir
                 for name in files:
                     if name.endswith(".exe"):
-                        exes.append(name)
+                        exes.append(os.path.join(path, name)) # Store full path for later
                         if folder.replace(" ", "").lower() in name.replace(" ", "").lower():
-                            logging.debug(path)
                             full_path_game_execution = os.path.join(path, name)
-                            logging.debug(f"Main game file detected: {full_path_game_execution}")
+                            logging.debug(f"Main executable found during recursive search for {folder}: {full_path_game_execution}")
                             break
-                        
-                        else:
-                            temp_name = ""
-                            for part in folder.split(" "):
-                                temp_name += part[0]
-
-                            temp_name += ".exe"
-                            
-                            if temp_name == name:
-                                pass
-                                full_path_game_execution = os.path.join("Games", folder, temp_name)
-                                
-        if full_path_game_execution == None or not full_path_game_execution.endswith(".exe"):
-            for file in exes:
-                logging.debug(file)
-                if not file.endswith(".exe"):
-                    continue
-                if "unity" in file.lower():
-                    continue
-                full_path_game_execution = os.path.join("Games", folder, file)
-                break
+            
+            # Fallback if no specific match, pick the first non-Unity exe
+            if full_path_game_execution is None:
+                logging.debug(f"No specific executable match for {folder}. Falling back to first non-Unity exe...")
+                for file_path in exes:
+                    if "unity" not in os.path.basename(file_path).lower():
+                        full_path_game_execution = file_path
+                        logging.debug(f"Fallback executable selected for {folder}: {full_path_game_execution}")
+                        break
+        
+        if full_path_game_execution is None:
+            logging.warning(f"Could not determine main executable for game folder: {folder}. Returning empty string.")
+            return "" # Return empty if no executable found at all
+            
         if not full_path_game_execution.startswith("Games"):
             full_path_game_execution = full_path_game_execution[len(os.getcwd()) + 1:]
-        #logging.debug({full_path_game_execution}, len(os.getcwd()))
-        return full_path_game_execution#, folder_name
+            logging.debug(f"Adjusted executable path to relative: {full_path_game_execution}")
+            
+        return full_path_game_execution
+
+def format_playtime(seconds):
+    if not isinstance(seconds, (int, float)):
+        return "N/A"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    return f"{hours}h {minutes}m"

@@ -137,3 +137,16 @@ class UserConfig:
         
         self.EXCLUDE_MESSAGE = self._data["exclude_message"]
         self.EXCLUDED = self._data["excluded"]
+
+    def save(self):
+        self._data["shutil_move_error_replace"] = self.SHUTIL_MOVE_ERROR_REPLACE
+        self._data["install_commen_redist"] = self.INSTALL_COMMENREDIST_STEAMRIP
+        self._data["search"] = self.SEARCH_GAMES
+        self._data["search"]["movies"] = self.SEARCH_MOVIES
+        self._data["search"]["series"] = self.SEARCH_SERIES
+        self._data["start_up_update"] = self.UPDATE_ON_STARTUP_ONLY
+        self._data["speed"] = self.DOWNLOAD_SPEED
+        self._data["exclude_message"] = self.EXCLUDE_MESSAGE
+        self._data["excluded"] = self.EXCLUDED
+        
+        save_json(self._path, self._data)

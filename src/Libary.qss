@@ -1,74 +1,78 @@
+/* Global Settings */
 QWidget {
-    background-color: #1a1a1a;
-    color: #e0e0e0;
-    font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    background-color: #222;
+    color: white;
+    font-size: 16px;
+    font-family: 'Montserrat', sans-serif;
 }
 
+/* Search Bar */
 QLineEdit {
-    background-color: #2c2c2c;
-    border: 1px solid #444;
-    border-radius: 8px;
-    padding: 10px;
-    font-size: 14px;
-    color: #e0e0e0;
+    background-color: #333;
+    border: 2px solid #444;
+    border-radius: 10px;
+    padding: 8px;
+    color: white;
 }
 
 QLineEdit:focus {
-    border: 1px solid #0078d7;
+    border: 2px solid #5a5a5a;
 }
 
+/* Game List (TreeWidget) */
 QTreeWidget {
-    background-color: #2c2c2c;
-    border: 1px solid #444;
-    border-radius: 8px;
-    padding: 10px;
-    color: #e0e0e0;
-    font-size: 14px;
+    background-color: #333;
+    border-radius: 10px;
+    padding: 5px;
+    color: white;
+    border: none;
+    font-size: 16px;
 }
 
 QTreeWidget::item {
-    padding: 8px 5px;
-    border-radius: 5px;
+    padding: 5px;
+    border-radius: 6px;
 }
 
 QTreeWidget::item:selected {
-    background-color: #0078d7;
-    color: #ffffff;
+    background-color: #444;
+    color: white;
 }
 
 QTreeWidget::item:hover:!selected {
-    background-color: #3e3e3e;
+    background-color: #3a3a3a;
 }
 
 QTreeWidget::header {
-    background-color: #2c2c2c;
-    color: #e0e0e0;
-    font-size: 14px;
+    background-color: #333;
+    color: white;
+    font-size: 16px;
     border: none;
     padding: 10px 5px;
 }
 
+/* Buttons */
 QPushButton {
-    background-color: #0078d7;
-    border: none;
+    background-color: #3a3a3a;
+    border: 1px solid #5a5a5a;
+    border-radius: 10px;
+    padding: 8px;
     color: white;
-    padding: 12px 20px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: bold;
+    font-weight: normal; /* Searcher uses default weight */
 }
 
 QPushButton:hover {
-    background-color: #005a9e;
+    background-color: #505050;
 }
 
 QPushButton:pressed {
-    background-color: #004578;
+    background-color: #3f3f3f;
 }
 
+/* Labels */
 QLabel {
-    font-size: 14px;
-    color: #e0e0e0;
+    color: white;
+    font-size: 16px;
 }
 
 #name_label {

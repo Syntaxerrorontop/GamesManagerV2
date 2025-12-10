@@ -1,5 +1,6 @@
 import os, hashlib, json, re, subprocess, psutil, logging, requests
 from bs4 import BeautifulSoup
+import urllib.parse
 
 from .utility_vars import CACHE_FOLDER
 
@@ -86,6 +87,69 @@ def get_png(page_content) -> str:
     download_url = img_url
     return download_url
 
+def get_screenshots(page_content) -> list:
+    """
+    Extracts up to 2 screenshot URLs by locating the 'SCREENSHOTS' header within .entry-content.
+    Scans elements immediately following the header until the next section starts.
+    """
+    screenshots = []
+    try:
+        soup = BeautifulSoup(page_content, "html.parser")
+        
+        # 1. Restrict search to main content area to avoid sidebar/footer noise
+        content_area = soup.select_one(".entry-content")
+        if not content_area:
+            content_area = soup # Fallback
+            
+        # 2. Find the marker
+        target_marker = content_area.find(lambda tag: tag.name in ['h2', 'h3', 'h4', 'span', 'strong', 'b', 'p'] 
+                                            and 'SCREENSHOTS' in tag.get_text(strip=True).upper())
+        
+        if target_marker:
+            # 3. Scan forward until we hit the next section header or find enough images
+            # We iterate through all next elements (tags) in document order
+            for tag in target_marker.find_all_next():
+                # Stop if we hit a new section header (e.g. "System Requirements")
+                if tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] and tag != target_marker:
+                    # Ignore empty headers or headers nested inside the marker (unlikely)
+                    if tag.get_text(strip=True): 
+                        break
+                
+                if tag.name == 'a':
+                    href = tag.get('href')
+                    if not href: continue
+                    
+                    processed_href = href
+
+                    # Handle Pinterest
+                    if "pinterest.com/pin/create/button/" in href:
+                        try:
+                            parsed = urllib.parse.urlparse(href)
+                            qs = urllib.parse.parse_qs(parsed.query)
+                            if 'media' in qs:
+                                processed_href = qs['media'][0]
+                        except: pass
+
+                    # Relative URLs
+                    if processed_href.startswith("/"):
+                        processed_href = "https://steamrip.com" + processed_href
+                    
+                    # Validation
+                    if "/wp-content/uploads/" in processed_href:
+                        if any(ext in processed_href.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                            if processed_href not in screenshots:
+                                screenshots.append(processed_href)
+                                if len(screenshots) >= 2:
+                                    break
+        else:
+             logging.warning("Could not find 'SCREENSHOTS' section.")
+
+    except Exception as e:
+        logging.error(f"Error extracting screenshots: {e}")
+    
+    return screenshots
+
+
 def _get_version_steamrip(url, scraper) -> str:
     if not url.startswith("https"):
         return ""
@@ -169,3 +233,40 @@ def format_playtime(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     return f"{hours}h {minutes}m"
+
+def clean_unused_cache_files() -> int:
+    """
+    Deletes files in CACHE_FOLDER that do not correspond to any game in games.json.
+    Returns the number of files deleted.
+    """
+    count = 0
+    try:
+        from .utility_vars import CONFIG_FOLDER, CACHE_FOLDER # Ensure imports inside if moved, but they are global in file
+        games_data = load_json(os.path.join(CONFIG_FOLDER, "games.json"))
+        active_hashes = set(games_data.keys())
+        
+        if not os.path.exists(CACHE_FOLDER):
+            return 0
+
+        for filename in os.listdir(CACHE_FOLDER):
+            # Skip known non-hash files
+            if filename in ["CachedGameList.json"]:
+                continue
+            
+            # Extract potential hash (first 32 chars)
+            if len(filename) >= 32:
+                file_hash = filename[:32]
+                
+                # Verify if it looks like an MD5 hash (hexadecimal)
+                if re.match(r'^[0-9a-fA-F]{32}', file_hash):
+                    if file_hash not in active_hashes:
+                        try:
+                            os.remove(os.path.join(CACHE_FOLDER, filename))
+                            logging.info(f"Cleaned unused cache file: {filename}")
+                            count += 1
+                        except Exception as e:
+                            logging.error(f"Failed to remove {filename}: {e}")
+    except Exception as e:
+        logging.error(f"Error during cache cleanup: {e}")
+        
+    return count

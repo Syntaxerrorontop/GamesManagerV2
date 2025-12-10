@@ -41,7 +41,7 @@ def _emergency_cleanup():
     """Emergency cleanup function called on program exit"""
     with _cleanup_lock:
         if _active_chrome_processes:
-            print("\n🚨 Emergency cleanup: Terminating Chrome processes...")
+            logging.info("\n🚨 Emergency cleanup: Terminating Chrome processes...")
             for pid in list(_active_chrome_processes):
                 try:
                     process = psutil.Process(pid)
@@ -61,11 +61,11 @@ def _emergency_cleanup():
                         except psutil.TimeoutExpired:
                             process.kill()
 
-                        print(f"✅ Terminated Chrome process {pid}")
+                        logging.info(f"✅ Terminated Chrome process {pid}")
                 except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                     pass
             _active_chrome_processes.clear()
-            print("🧹 Emergency cleanup completed")
+            logging.info("🧹 Emergency cleanup completed")
 
 
 # Register emergency cleanup
@@ -89,7 +89,7 @@ try:
     import colorama
     import psutil
 except ImportError:
-    print("Installing required dependencies...")
+    logging.info("Installing required dependencies...")
     import subprocess
 
     subprocess.check_call(
@@ -357,9 +357,8 @@ class UniversalScraper:
 
                 self.logger.info(f"Hidden {len(windows)} Chrome windows")
 
-            else:
-
-                self.logger.debug("No Chrome windows found to hide")
+            # else:
+            #    self.logger.debug("No Chrome windows found to hide")
 
         except Exception as e:
 
@@ -914,7 +913,9 @@ class UniversalScraper:
                 self._hide_chrome_windows()
 
                 # Schedule periodic window hiding (some windows might appear later)
-                threading.Timer(5.0, self._hide_chrome_windows).start()
+                timer = threading.Timer(5.0, self._hide_chrome_windows)
+                timer.name = "WindowHiderTimer"
+                timer.start()
 
             return driver
 

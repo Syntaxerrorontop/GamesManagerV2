@@ -1,8 +1,8 @@
-from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QLineEdit, QDialog, QCheckBox, QFileDialog, QInputDialog,
-                             QSizePolicy, QMessageBox)
+                             QSizePolicy, QMessageBox, QScrollArea, QFrame)
 import os
 import shutil
 import json
@@ -17,16 +17,6 @@ class GameDetailsWidget(QWidget):
         self.libary = libary
         self.logger = logging.getLogger('GameDetails')
         self.init_ui()
-        self.install_button.clicked.connect(self.install)
-        self.launch_button.clicked.connect(self.toggle_game_state)
-        self.update_button.clicked.connect(self.install)
-        self.uninstall_button.clicked.connect(self.uninstall)
-        self.add_category_button.clicked.connect(self.add_to_category)
-        self.remove_from_category_button.clicked.connect(self.remove_from_category)
-        self.remove_from_account_button.clicked.connect(self.remove_from_account)
-        self.manuel_path_button.clicked.connect(self.set_path)
-        self.args_bar.textChanged.connect(self.arg_callback)
-
         self.check_timer = QTimer(self)
         self.check_timer.setInterval(500)
         self.check_timer.timeout.connect(self.update_ui_state)
@@ -64,94 +54,207 @@ class GameDetailsWidget(QWidget):
         
         if is_running:
             self.launch_button.setText("Stop Game")
-            self.launch_button.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold;")
+            self.launch_button.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold; border-radius: 6px; padding: 6px;")
             self.uninstall_button.setEnabled(False)
-            self.uninstall_button.setToolTip("Cannot uninstall while game is running")
         else:
             self.launch_button.setText("Launch")
-            self.launch_button.setStyleSheet("")
+            self.launch_button.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; border-radius: 6px; padding: 6px;")
             self.uninstall_button.setEnabled(True)
-            self.uninstall_button.setToolTip("")
 
     def init_ui(self):
-        main_layout = QVBoxLayout()
+        # Main Layout
+        main_layout = QVBoxLayout(self)
         self.setLayout(main_layout)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(10)
 
-        # --- Image ---
-        self.image_label = QLabel()
-        self.image_label.setMinimumSize(640, 360)
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("border: 1px solid #444; border-radius: 8px;")
-        main_layout.addWidget(self.image_label)
+        # Scroll Area for entire details content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        
+        content_widget = QWidget()
+        self.content_layout = QVBoxLayout(content_widget)
+        self.content_layout.setSpacing(15)
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
 
-        # --- Details ---
-        details_layout = QVBoxLayout()
-        main_layout.addLayout(details_layout)
-
+        # --- Header (Name + Version) ---
+        header_layout = QHBoxLayout()
         self.name_label = QLabel()
         self.name_label.setObjectName("name_label")
-        details_layout.addWidget(self.name_label)
-
-        info_layout = QHBoxLayout()
-        details_layout.addLayout(info_layout)
+        self.name_label.setStyleSheet("font-size: 26px; font-weight: bold; color: white;")
+        header_layout.addWidget(self.name_label)
+        
+        header_layout.addStretch()
         
         self.version_label = QLabel()
-        self.version_label.setObjectName("version_label")
-        info_layout.addWidget(self.version_label)
+        self.version_label.setStyleSheet("font-size: 14px; color: #aaa;")
+        header_layout.addWidget(self.version_label)
+        self.content_layout.addLayout(header_layout)
 
+        # --- Main Image (Large & Centered) ---
+        main_image_container = QWidget()
+        main_image_layout = QHBoxLayout(main_image_container)
+        main_image_layout.setContentsMargins(0, 10, 0, 10)
+        
+        self.main_image = QLabel()
+        self.main_image.setFixedSize(720, 405) # 16:9 Large format
+        self.main_image.setStyleSheet("border: 1px solid #444; border-radius: 8px; background: #222;")
+        self.main_image.setAlignment(Qt.AlignCenter)
+        
+        main_image_layout.addStretch()
+        main_image_layout.addWidget(self.main_image)
+        main_image_layout.addStretch()
+        
+        self.content_layout.addWidget(main_image_container)
+
+        # --- Screenshots Section ---
+        screenshots_header = QLabel("Screenshots")
+        screenshots_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #ddd; margin-left: 5px;")
+        self.content_layout.addWidget(screenshots_header)
+
+        # Horizontal scroll area for screenshots
+        image_scroll = QScrollArea()
+        image_scroll.setWidgetResizable(True)
+        image_scroll.setFixedHeight(250) # Reduced height since main image is moved
+        image_scroll.setFrameShape(QFrame.NoFrame)
+        image_scroll.setStyleSheet("background: transparent;")
+        
+        image_container = QWidget()
+        self.image_layout = QHBoxLayout(image_container)
+        self.image_layout.setSpacing(15)
+        self.image_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Screenshots
+        self.screenshot1 = QLabel()
+        self.screenshot1.setFixedSize(384, 216) # Smaller 16:9 for gallery
+        self.screenshot1.setStyleSheet("border: 1px solid #444; border-radius: 8px; background: #222;")
+        self.screenshot1.setAlignment(Qt.AlignCenter)
+        self.image_layout.addWidget(self.screenshot1)
+        
+        self.screenshot2 = QLabel()
+        self.screenshot2.setFixedSize(384, 216)
+        self.screenshot2.setStyleSheet("border: 1px solid #444; border-radius: 8px; background: #222;")
+        self.screenshot2.setAlignment(Qt.AlignCenter)
+        self.image_layout.addWidget(self.screenshot2)
+        
+        self.image_layout.addStretch()
+        image_scroll.setWidget(image_container)
+        self.content_layout.addWidget(image_scroll)
+
+        # --- Info Section ---
+        info_frame = QFrame()
+        info_frame.setStyleSheet("background-color: #252525; border-radius: 8px; padding: 10px;")
+        info_layout = QVBoxLayout(info_frame)
+        
         self.playtime_label = QLabel()
-        self.playtime_label.setObjectName("playtime_label")
+        self.playtime_label.setStyleSheet("font-size: 14px; color: #ddd;")
         info_layout.addWidget(self.playtime_label)
 
         self.categories_label = QLabel()
-        self.categories_label.setObjectName("categories_label")
-        details_layout.addWidget(self.categories_label)
+        self.categories_label.setStyleSheet("font-size: 14px; color: #ddd;")
+        info_layout.addWidget(self.categories_label)
 
         self.args_bar = QLineEdit()
-        self.args_bar.setPlaceholderText("Enter arguments...")
-        details_layout.addWidget(self.args_bar)
-
-        # --- Buttons ---
-        button_grid = QVBoxLayout()
-        main_layout.addLayout(button_grid)
-
-        row1_layout = QHBoxLayout()
-        button_grid.addLayout(row1_layout)
+        self.args_bar.setPlaceholderText("Launch Arguments...")
+        self.args_bar.setStyleSheet("background: #333; border: 1px solid #444; padding: 5px; border-radius: 4px; color: white;")
+        self.args_bar.textChanged.connect(self.arg_callback)
+        info_layout.addWidget(self.args_bar)
         
-        self.launch_button = QPushButton("Launch")
-        row1_layout.addWidget(self.launch_button)
+        self.content_layout.addWidget(info_frame)
 
-        self.install_button = QPushButton("Install")
-        row1_layout.addWidget(self.install_button)
+        # --- Action Buttons ---
+        self.button_layout = QHBoxLayout()
+        self.button_layout.setSpacing(10)
         
-        row2_layout = QHBoxLayout()
-        button_grid.addLayout(row2_layout)
-
-        self.update_button = QPushButton("Install Update")
-        row2_layout.addWidget(self.update_button)
-
-        self.uninstall_button = QPushButton("Uninstall")
-        self.uninstall_button.setStyleSheet("background-color: #c0392b;")
-        row2_layout.addWidget(self.uninstall_button)
-
-        row3_layout = QHBoxLayout()
-        button_grid.addLayout(row3_layout)
-
-        self.add_category_button = QPushButton("Add to Category")
-        row3_layout.addWidget(self.add_category_button)
-
-        self.remove_from_category_button = QPushButton("Remove from Category")
-        row3_layout.addWidget(self.remove_from_category_button)
-
-        self.remove_from_account_button = QPushButton("Remove from Account")
-        button_grid.addWidget(self.remove_from_account_button)
-
-        self.manuel_path_button = QPushButton("Set Game Path")
-        button_grid.addWidget(self.manuel_path_button)
+        self.launch_button = self._create_btn("Launch", "#27ae60")
+        self.launch_button.clicked.connect(self.toggle_game_state)
         
+        self.install_button = self._create_btn("Install", "#2980b9")
+        self.install_button.clicked.connect(self.install)
+        
+        self.update_button = self._create_btn("Update", "#f39c12")
+        self.update_button.clicked.connect(self.install)
+        
+        self.uninstall_button = self._create_btn("Uninstall", "#c0392b")
+        self.uninstall_button.clicked.connect(self.uninstall)
+        
+        self.button_layout.addWidget(self.launch_button)
+        self.button_layout.addWidget(self.install_button)
+        self.button_layout.addWidget(self.update_button)
+        self.button_layout.addWidget(self.uninstall_button)
+        self.button_layout.addStretch()
+        
+        self.content_layout.addLayout(self.button_layout)
+
+        # --- Tools Section (Secondary Actions) ---
+        tools_layout = QHBoxLayout()
+        tools_layout.setSpacing(10)
+        
+        self.add_cat_btn = self._create_btn("Add Category", "#888", outline=True)
+        self.add_cat_btn.clicked.connect(self.add_to_category)
+        
+        self.rem_cat_btn = self._create_btn("Remove Category", "#888", outline=True)
+        self.rem_cat_btn.clicked.connect(self.remove_from_category)
+        
+        self.path_btn = self._create_btn("Set Path", "#888", outline=True)
+        self.path_btn.clicked.connect(self.set_path)
+        
+        self.rem_acc_btn = self._create_btn("Remove Game", "#c0392b", outline=True)
+        self.rem_acc_btn.clicked.connect(self.remove_from_account)
+
+        tools_layout.addWidget(self.add_cat_btn)
+        tools_layout.addWidget(self.rem_cat_btn)
+        tools_layout.addWidget(self.path_btn)
+        tools_layout.addWidget(self.rem_acc_btn)
+        tools_layout.addStretch()
+
+        self.content_layout.addLayout(tools_layout)
+        self.content_layout.addStretch()
+
+    def _create_btn(self, text, bg_color, outline=False):
+        btn = QPushButton(text)
+        
+        if outline:
+            style = f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {bg_color};
+                    border: 1px solid {bg_color};
+                    border-radius: 6px;
+                    font-weight: 600;
+                    padding: 6px 12px;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {bg_color};
+                    color: white;
+                }}
+            """
+        else:
+            style = f"""
+                QPushButton {{
+                    background-color: {bg_color};
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    font-weight: bold;
+                    padding: 8px 16px; 
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{
+                    background-color: {bg_color}99;
+                }}
+            """
+            
+        btn.setStyleSheet(style)
+        btn.setCursor(Qt.PointingHandCursor)
+        # Remove fixed width to allow flexible sizing based on text
+        # btn.setFixedWidth(120) 
+        return btn
+
     def remove_from_account(self):
         if not hasattr(self, 'game'):
             return
@@ -185,35 +288,64 @@ class GameDetailsWidget(QWidget):
             if self.game.name in data:
                 del data[self.game.name]
                 save_json(os.path.join(CONFIG_FOLDER, "games.json"), data)
+                
+                # Remove cached images
+                hash_val = hash_url(self.game.link)
+                files_to_remove = [
+                    os.path.join(CACHE_FOLDER, f"{hash_val}.png"),
+                    os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_1.jpg"),
+                    os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_1.png"),
+                    os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_2.jpg"),
+                    os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_2.png")
+                ]
+                
+                for fpath in files_to_remove:
+                    if os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except OSError:
+                            pass
+                            
                 self.libary.load_games()
 
-        
     def set_game(self, game):
         self.game = game
         self.last_running_state = None # Force update
         display_name = game.alias if game.alias else game.name
         self.name_label.setText(display_name)
-        self.version_label.setText(f"Version: {game.version}")
+        self.version_label.setText(f"v{game.version}")
         self.playtime_label.setText(f"Playtime: {format_playtime(game.playtime)}")
         self.categories_label.setText(f"Categories: {', '.join(game.categories)}")
         self.args_bar.setText(game.args)
 
-        # Handle image loading
-        image_path = os.path.join(CACHE_FOLDER, get_hashed_file(hash_url(game.link), ".png"))
-        self.logger.info(f"Loading image from: {image_path}")
-        if os.path.exists(image_path):
-            pixmap = QPixmap(image_path)
-            if not pixmap.isNull():
-                self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-                self.image_label.setVisible(True)
+        # Helper to load image to label
+        def load_img(label, path):
+            if os.path.exists(path):
+                pixmap = QPixmap(path)
+                if not pixmap.isNull():
+                    label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    label.setVisible(True)
+                else:
+                    label.setVisible(False)
             else:
-                self.image_label.setText("Failed to load image")
-                self.image_label.setVisible(True)
-        else:
-            self.logger.warning(f"Image not found at: {image_path}")
-            self.image_label.setText("No Image")
-            self.image_label.setVisible(True)
+                label.setVisible(False)
 
+        hash_val = hash_url(game.link)
+        
+        # 1. Main Image
+        main_path = os.path.join(CACHE_FOLDER, f"{hash_val}.png")
+        load_img(self.main_image, main_path)
+        
+        # 2. Screenshots (try jpg then png)
+        # Check extensions manually or assume jpg as preferred
+        s1_path = os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_1.jpg")
+        if not os.path.exists(s1_path): s1_path = os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_1.png")
+        
+        s2_path = os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_2.jpg")
+        if not os.path.exists(s2_path): s2_path = os.path.join(CACHE_FOLDER, f"{hash_val}_screenshot_2.png")
+
+        load_img(self.screenshot1, s1_path)
+        load_img(self.screenshot2, s2_path)
 
         # Update button visibility
         is_installed = "Installed" in game.categories

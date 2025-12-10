@@ -6,6 +6,28 @@ import subprocess
 import ctypes
 import sys
 import traceback
+import colorama
+from colorama import Fore, Style
+
+colorama.init()
+
+class ColoredFormatter(logging.Formatter):
+    def __init__(self, fmt, datefmt=None):
+        super().__init__()
+        self.fmt = fmt
+        self.datefmt = datefmt
+        self.FORMATS = {
+            logging.DEBUG: Fore.CYAN + self.fmt + Style.RESET_ALL,
+            logging.INFO: Fore.GREEN + self.fmt + Style.RESET_ALL,
+            logging.WARNING: Fore.YELLOW + self.fmt + Style.RESET_ALL,
+            logging.ERROR: Fore.RED + self.fmt + Style.RESET_ALL,
+            logging.CRITICAL: Fore.RED + Style.BRIGHT + self.fmt + Style.RESET_ALL
+        }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno, self.fmt)
+        formatter = logging.Formatter(log_fmt, self.datefmt)
+        return formatter.format(record)
 
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QMessageBox
 from PyQt5.QtGui import QFontDatabase, QFont
@@ -30,8 +52,9 @@ class TabWidget(QWidget):
         super().__init__()
         
         self.scraper = UniversalScraper(download_dir=CACHE_FOLDER, headless=False)
-        self.scraper.start()
-        self.scraper.goto("https://steamrip.com", wait_for_load=True)
+        # Initialization moved to background/on-demand to fix startup freeze
+        # self.scraper.start() 
+        # self.scraper.goto("https://steamrip.com", wait_for_load=True)
         
         self.tab_info = {}
         self.last_tab = "Library"
@@ -211,7 +234,13 @@ def delete_unaccessary_folder():
                     logging.error(f"Error deleting folder {folder}: {e}")
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='[%(asctime)s][%(levelname)s] %(name)s/%(module)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    # Setup Colored Logging
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(ColoredFormatter('[%(asctime)s][%(levelname)s] [%(threadName)s] %(name)s/%(module)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    root_logger.addHandler(console_handler)
     
     if not os.path.exists(os.path.join(CONFIG_FOLDER, ".check_folder")):
     
@@ -266,6 +295,9 @@ if __name__ == "__main__":
     
     ui = Ui_MainWindow()
     ui.init(MainWindow)
+
+    from src.utility.config_updater import update_game_configs
+    update_game_configs()
     
     MainWindow.show()
     sys.exit(app.exec_())
